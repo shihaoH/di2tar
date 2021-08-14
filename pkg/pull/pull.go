@@ -3,6 +3,7 @@ package pull
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -17,9 +18,18 @@ type Token struct {
 	AccessToken string `json:"access_token"`
 }
 
+type manifestsBody struct {
+	schemaVersion float64
+	mediaType string
+	config map[string]interface{}
+	layers []map[string]interface{}
+}
+
 const (
 	WWW_AUTHENTICATE = "Www-Authenticate"
 	ACCEPT = "application/vnd.docker.distribution.manifest.v2+json"
+	ACCEPT_LIST = "application/vnd.docker.distribution.manifest.list.v2+json"
+	MANIFSTS_URL = "https://%s/v2/%s/manifests/%s"
 )
 
 func Pull(reg, repo, tag string) error {
@@ -28,7 +38,6 @@ func Pull(reg, repo, tag string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(resp)
 	authUrl := "https://auth.docker.io/token"
 	regService := "registry.docker.io"
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -40,25 +49,67 @@ func Pull(reg, repo, tag string) error {
 			regService = ""
 		}
 	}
-	getAuthHead(authUrl, regService, repo)
+	authToken, err := getAuthHead(authUrl, regService, repo)
+	if err != nil {
+		return err
+	}
+	err = getManifests(authToken, repo, reg, tag)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-func getAuthHead(authUrl, regService, repo string) (*AuthToken, error) {
+func getManifests(authToken, repo, reg, tag string) error {
+	r := NewRequester()
+	url := fmt.Sprintf(MANIFSTS_URL, reg, repo, tag)
+
+	//resMap := &map[string]interface{}{}
+	manifests := &manifestsBody{}
+	resp, err := r.Get(url, manifests, map[string]string{
+		"Authorization": authToken,
+		"Accept": ACCEPT,
+	},nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[-] Cannot fetch manifest for %s [HTTP %v]\n", repo, resp.StatusCode)
+		resp, err = r.Get(url, manifests, map[string]string{
+			"Authorization": authToken,
+			"Accept": ACCEPT_LIST,
+		},nil)
+		if resp.StatusCode == http.StatusOK {
+			log.Printf("[+] Manifests found for this tag (use the @digest format to pull the corresponding image):")
+			//m := *resMap
+			//manifests := make(map[string]interface{})(m["manifests"])
+			//for k, v := range manifests {
+			//
+			//}
+		}
+
+	}
+
+	//for _, layer := range manifests.layers {
+	//	ublob := layer["digest"]
+	//}
+
+	return nil
+}
+
+func getAuthHead(authUrl, regService, repo string) (string, error) {
 	url := fmt.Sprintf("%s?service=%s&scope=repository:%s:pull", authUrl, regService, repo)
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	token := &Token{}
 	response, err := ReadJSONResponse(resp, token)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	fmt.Println(response)
-	return &AuthToken{
-		Authorization: fmt.Sprintf("Bearer %s", ),
-	}, nil
+	return fmt.Sprintf("Bearer %s", token.Token), nil
 }
 
 func ReadJSONResponse(response *http.Response, responseStruct interface{}) (*http.Response, error) {
